@@ -211,4 +211,4 @@ else:
 
         st.subheader(f"🌦️ Forecast & Flood/Drought Classification for {region_input.title()}")
         st.dataframe(forecast_df)
-        st.line_chart(forecast_df.set_index('Year')['Predicted
+        st.line_chart(forecast_df.set_index('Year')['Predicted_Rainfall_mm'])
