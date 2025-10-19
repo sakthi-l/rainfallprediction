@@ -1,218 +1,170 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import joblib
-from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+from xgboost import XGBClassifier
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from imblearn.over_sampling import SMOTE
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.linear_model import LassoCV
 from sklearn.preprocessing import RobustScaler
-from sklearn.pipeline import Pipeline
-from xgboost import XGBClassifier
+from sklearn.model_selection import TimeSeriesSplit
 
-# ---------------- STREAMLIT PAGE SETTINGS ----------------
-st.set_page_config(page_title="Rainfall & Flood/Drought App", layout="wide")
+st.set_page_config(page_title="Flood/Drought & Rainfall Predictor", layout="wide")
 
-# ---------------- PATH SETTINGS ----------------
-DATA_DIRS = ["./data", "./", "/content"]
-MODEL_DIR = Path("./models")
-MODEL_DIR.mkdir(exist_ok=True)
-
-# ---------------- FILE LOADERS ----------------
+# ==============================
+# LOAD DATA
+# ==============================
 @st.cache_data
-def find_file(names):
-    for d in DATA_DIRS:
-        for n in names:
-            p = Path(d) / n
-            if p.exists():
-                return str(p)
-    return None
+def load_data():
+    df_class = pd.read_csv("/content/rainfallpred.csv")
+    df_forecast = pd.read_csv("Rainfall_Data_LL.csv")
+    df_forecast.columns = df_forecast.columns.str.strip().str.upper()
+    return df_class, df_forecast
 
-@st.cache_data
-def load_region_df():
-    candidates = ["Rainfall_Data_LL.csv", "rainfall_dataset.csv", "region_rainfall.csv"]
-    p = find_file(candidates)
-    if p:
-        return pd.read_csv(p)
-    return None
+df_class, df_forecast = load_data()
 
-@st.cache_data
-def load_flood_df():
-    candidates = ["rainfallpred.csv", "flood_drought.csv", "rainfall_pred.csv"]
-    p = find_file(candidates)
-    if p:
-        return pd.read_csv(p)
-    return None
+months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
 
-# ---------------- FALLBACK TRAINERS ----------------
-def train_region_model(df):
-    """Fallback region rainfall prediction using LassoCV"""
-    df2 = df.copy()
-    months = [c for c in df2.columns if c.strip().upper()[:3] in
-              ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-               "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]]
-    if len(months) >= 12:
-        df2['Total'] = df2[months].sum(axis=1)
-    if 'Total' not in df2.columns or 'SUBDIVISION' not in df2.columns:
-        raise ValueError("Missing required columns (SUBDIVISION, monthly or Total).")
+# ==============================
+# SIDE MENU
+# ==============================
+st.sidebar.title("Options")
+task = st.sidebar.radio("Choose Task:", ["Flood/Drought Classification", "Rainfall Forecasting"])
 
-    df2 = df2.sort_values(['SUBDIVISION', 'YEAR'])
-    df2['Prev1'] = df2.groupby('SUBDIVISION')['Total'].shift(1)
-    df2 = df2.dropna(subset=['Prev1'])
+# ==============================
+# FLOOD/DROUGHT CLASSIFICATION
+# ==============================
+if task == "Flood/Drought Classification":
+    st.header("🌦️ Flood/Drought Classification")
 
-    X = df2[['YEAR', 'Prev1']]
-    y = df2['Total']
+    # Select region and year
+    region = st.selectbox("Select Region", sorted(df_class['SUBDIVISION'].unique()))
+    year = st.number_input("Enter Year", min_value=int(df_class['YEAR'].min()), max_value=int(df_class['YEAR'].max()), value=int(df_class['YEAR'].max()))
 
-    model = Pipeline([
-        ('scaler', RobustScaler()),
-        ('lasso', LassoCV(cv=5, random_state=0))
-    ])
-    model.fit(X, y)
-    return model
+    # --- Training code (from your script) ---
+    # Compute Total & SPI
+    df_class['Total'] = df_class[months].sum(axis=1)
+    df_class['region_mean'] = df_class.groupby('SUBDIVISION')['Total'].transform('mean')
+    df_class['region_std'] = df_class.groupby('SUBDIVISION')['Total'].transform('std')
+    df_class['SPI_region'] = (df_class['Total'] - df_class['region_mean']) / df_class['region_std']
+    df_class['drought_pctl'] = df_class.groupby('SUBDIVISION')['Total'].transform(lambda x: x.quantile(0.05))
+    df_class['flood_pctl'] = df_class.groupby('SUBDIVISION')['Total'].transform(lambda x: x.quantile(0.95))
 
-def train_flood_model(df):
-    """Fallback flood/drought classifier using XGBoost"""
-    if 'Label' not in df.columns or 'SUBDIVISION' not in df.columns:
-        raise ValueError("Missing required columns (Label, SUBDIVISION).")
+    def classify_region(row):
+        if row['SPI_region'] <= -1 or row['Total'] < row['drought_pctl']:
+            return "Drought"
+        elif row['SPI_region'] >= 1.5 or row['Total'] > row['flood_pctl']:
+            return "Flood"
+        else:
+            return "Normal"
 
-    feature_cols = [c for c in df.columns if c not in ['SUBDIVISION', 'YEAR', 'Label']
-                    and pd.api.types.is_numeric_dtype(df[c])]
-    if not feature_cols:
-        months = [c for c in df.columns if c.strip().upper()[:3] in
-                  ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                   "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]]
-        feature_cols = months
+    df_class['Label'] = df_class.apply(classify_region, axis=1)
 
-    X = df[feature_cols].fillna(0)
-    y = df['Label']
-    clf = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
-    clf.fit(X, y)
-    return clf, feature_cols
+    # Feature engineering
+    df_class['Mean_Rain'] = df_class[months].mean(axis=1)
+    df_class['Std_Rain'] = df_class[months].std(axis=1)
+    df_class['CoeffVar'] = df_class['Std_Rain'] / (df_class['Mean_Rain'] + 1e-6)
+    df_class['Dry_Months'] = (df_class[months] < df_class[months].mean(axis=1).mean()).sum(axis=1)
+    df_class['Wet_Months'] = (df_class[months] > df_class[months].mean(axis=1).mean()).sum(axis=1)
+    df_class['Max_Month'] = df_class[months].idxmax(axis=1).apply(lambda x: months.index(x) + 1)
+    df_class['Prev_Total'] = df_class.groupby('SUBDIVISION')['Total'].shift(1)
+    df_class['Diff_Total'] = df_class['Total'] - df_class['Prev_Total']
+    df_class['Prev_SPI'] = df_class.groupby('SUBDIVISION')['SPI_region'].shift(1)
+    df_class.fillna(0, inplace=True)
 
-# ---------------- SIDEBAR NAVIGATION ----------------
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Home", "Region Rainfall Prediction", "Flood / Drought Classification"])
+    enc = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+    region_encoded = pd.DataFrame(enc.fit_transform(df_class[['SUBDIVISION']]), columns=enc.get_feature_names_out(['SUBDIVISION']))
+    df_class = pd.concat([df_class, region_encoded], axis=1)
 
-# ---------------- HOME PAGE ----------------
-if page == "Home":
-    st.title("🌦️ Rainfall & Flood/Drought Prediction App")
-    st.write("""
-    This app has **two tools**:
-    - 📈 Region Rainfall Prediction
-    - 🌧️ Flood/Drought Classification
+    feature_cols = months + ['Mean_Rain','Std_Rain','CoeffVar','Dry_Months','Wet_Months','Max_Month','Diff_Total','Prev_SPI'] + list(region_encoded.columns)
+    X = df_class[feature_cols]
+    y = df_class['Label']
 
-    It can use your saved models or automatically train fallback models using CSV files.
-    """)
-    df_r = load_region_df()
-    df_f = load_flood_df()
-    st.write("**File Detection Status:**")
-    st.write({
-        'Region CSV Found': bool(df_r),
-        'Flood CSV Found': bool(df_f),
-        'Region Model Found': (MODEL_DIR / 'region_model.pkl').exists(),
-        'Flood Model Found': (MODEL_DIR / 'flood_model.pkl').exists()
-    })
+    sm = SMOTE(random_state=42)
+    X_res, y_res = sm.fit_resample(X, y)
 
-# ---------------- REGION RAINFALL PAGE ----------------
-if page == "Region Rainfall Prediction":
-    st.header("📈 Region Rainfall Prediction")
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y_res)
 
-    df_r = load_region_df()
-    model_path = MODEL_DIR / 'region_model.pkl'
-    model_region = None
+    clf = XGBClassifier(
+        n_estimators=400, max_depth=6, learning_rate=0.05,
+        subsample=0.9, colsample_bytree=0.9, gamma=0.1,
+        objective='multi:softprob', num_class=3, random_state=42
+    )
+    clf.fit(X_res, y_encoded)
 
-    if model_path.exists():
-        model_region = joblib.load(model_path)
-        st.success("Loaded trained region model!")
-
-    if df_r is None and model_region is None:
-        st.error("Upload 'Rainfall_Data_LL.csv' to /data or add 'region_model.pkl' to /models.")
+    # Prediction
+    row = df_class[(df_class['SUBDIVISION']==region) & (df_class['YEAR']==year)]
+    if not row.empty:
+        features = row[feature_cols]
+        pred_label = le.inverse_transform(np.argmax(clf.predict_proba(features), axis=1))[0]
     else:
-        if df_r is not None:
-            st.dataframe(df_r.head())
-            regions = sorted(df_r['SUBDIVISION'].unique())
+        pred_label = "No data available"
+
+    st.success(f"🌦️ Prediction for **{region}** in **{year}**: **{pred_label}**")
+
+# ==============================
+# RAINFALL FORECASTING
+# ==============================
+else:
+    st.header("🌧️ Rainfall Forecasting (Lasso)")
+    region_input = st.text_input("Enter Region Name (Exact or Partial)", "")
+    year_input = st.number_input("Enter Year to Forecast", min_value=int(df_forecast['YEAR'].min()), max_value=int(df_forecast['YEAR'].max())+10, value=int(df_forecast['YEAR'].max()))
+
+    if st.button("Forecast"):
+        region_match = df_forecast[df_forecast['SUBDIVISION'].str.contains(region_input, case=False, na=False)]
+        if region_match.empty:
+            st.error("❌ Region not found!")
         else:
-            regions = []
+            data = region_match.groupby("YEAR")["ANNUAL"].mean().reset_index().dropna()
+            data = data.sort_values("YEAR").reset_index(drop=True)
 
-        region = st.selectbox("Select Region", regions if regions else ["No data"])
-        year = st.number_input("Year to Predict", min_value=1900, max_value=2100, value=2025)
-        monthly_text = st.text_input("Monthly values (12 comma-separated numbers) [Optional]")
+            # Feature engineering function (from your script)
+            def create_features(data, target_year=None):
+                df = data.copy()
+                for i in range(1,8): df[f'Lag{i}'] = df["ANNUAL"].shift(i)
+                for window in [2,3,5,7,10]:
+                    df[f'MA{window}'] = df["ANNUAL"].rolling(window).mean()
+                    df[f'STD{window}'] = df["ANNUAL"].rolling(window).std()
+                    df[f'Min{window}'] = df["ANNUAL"].rolling(window).min()
+                    df[f'Max{window}'] = df["ANNUAL"].rolling(window).max()
+                    df[f'Range{window}'] = df[f'Max{window}'] - df[f'Min{window}']
+                for span in [2,3,5,7]: df[f'EMA{span}'] = df["ANNUAL"].ewm(span=span, adjust=False).mean()
+                df['Year_Norm'] = (df['YEAR'] - df['YEAR'].min()) / (df['YEAR'].max() - df['YEAR'].min())
+                df['Year_Squared'] = df['Year_Norm'] ** 2
+                df['Year_Cubed'] = df['Year_Norm'] ** 3
+                df = df.dropna().reset_index(drop=True)
+                return df
 
-        if st.button("Predict Rainfall"):
-            try:
-                if model_region is None:
-                    model_region = train_region_model(df_r)
-                    joblib.dump(model_region, model_path)
-                    st.info("Trained fallback model and saved to /models.")
+            data_features = create_features(data, year_input if year_input>data['YEAR'].max() else None)
+            feature_cols = [col for col in data_features.columns if col not in ['YEAR','ANNUAL']]
 
-                if monthly_text:
-                    vals = [float(x) for x in monthly_text.split(',')]
-                    total = sum(vals)
-                    st.success(f"Provided total = {total:.2f} mm")
-                else:
-                    subdf = df_r[df_r['SUBDIVISION'] == region].sort_values('YEAR')
-                    prev1 = subdf[subdf['YEAR'] < year]['Total'].iloc[-1] if 'Total' in subdf.columns else 0
-                    X_in = pd.DataFrame({'YEAR': [year], 'Prev1': [prev1]})
-                    pred = model_region.predict(X_in)[0]
-                    st.metric("Predicted Annual Rainfall (mm)", f"{pred:.2f}")
+            train_data = data_features[data_features['YEAR'] <= data['YEAR'].max()]
+            test_data = data_features[data_features['YEAR'] == year_input]
 
-            except Exception as e:
-                st.error(f"Prediction Error: {e}")
+            X_train = train_data[feature_cols].values
+            y_train = train_data['ANNUAL'].values
+            X_test = test_data[feature_cols].values
 
-# ---------------- FLOOD / DROUGHT PAGE ----------------
-if page == "Flood / Drought Classification":
-    st.header("🌧️ Flood / Drought Classification")
+            scaler = RobustScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
 
-    df_f = load_flood_df()
-    model_path = MODEL_DIR / 'flood_model.pkl'
-    flood_model = None
-    flood_features = None
+            tscv = TimeSeriesSplit(n_splits=min(5,len(X_train)//5))
+            lasso_cv = LassoCV(cv=tscv, random_state=42, max_iter=10000, n_alphas=100)
+            lasso_cv.fit(X_train_scaled, y_train)
 
-    if model_path.exists():
-        obj = joblib.load(model_path)
-        if isinstance(obj, tuple):
-            flood_model, flood_features = obj
-        else:
-            flood_model = obj
-        st.success("Loaded trained flood/drought model!")
+            predicted = float(lasso_cv.predict(X_test_scaled)[0])
+            actual = None
+            if year_input in data['YEAR'].values:
+                actual = float(data.loc[data['YEAR']==year_input,'ANNUAL'].values[0])
 
-    if df_f is None and flood_model is None:
-        st.error("Upload 'rainfallpred.csv' to /data or add 'flood_model.pkl' to /models.")
-    else:
-        if df_f is not None:
-            st.dataframe(df_f.head())
-            subdivisions = sorted(df_f['SUBDIVISION'].unique())
-        else:
-            subdivisions = []
-
-        subdivision = st.selectbox("Select Subdivision", subdivisions if subdivisions else ["No data"])
-        year = st.number_input("Year", min_value=1900, max_value=2100, value=2025)
-        manual_text = st.text_input("Manual numeric features (comma-separated) [Optional]")
-
-        if st.button("Classify"):
-            try:
-                if flood_model is None:
-                    flood_model, flood_features = train_flood_model(df_f)
-                    joblib.dump((flood_model, flood_features), model_path)
-                    st.info("Trained fallback flood/drought model and saved to /models.")
-
-                if manual_text:
-                    vals = [float(x) for x in manual_text.split(',')]
-                    X_in = np.array(vals).reshape(1, -1)
-                else:
-                    if flood_features is None:
-                        flood_features = [c for c in df_f.columns if c not in ['SUBDIVISION', 'YEAR', 'Label']]
-                    row = df_f[df_f['SUBDIVISION'] == subdivision].tail(1)
-                    X_in = row[flood_features].fillna(0).values
-
-                pred = flood_model.predict(X_in)[0]
-                st.success(f"Prediction: {pred}")
-                if hasattr(flood_model, 'predict_proba'):
-                    proba = flood_model.predict_proba(X_in)[0]
-                    st.write("Class probabilities:", proba)
-
-            except Exception as e:
-                st.error(f"Classification Error: {e}")
-
-# ---------------- FOOTER ----------------
-st.sidebar.markdown("---")
-st.sidebar.info("Built with ❤️ using Streamlit. Upload models or datasets to customize predictions.")
+            st.subheader(f"🌦️ Forecast for {region_input.title()} in {year_input}")
+            if actual: st.write(f"Actual: {actual:.2f} mm")
+            st.write(f"Predicted: {predicted:.2f} mm")
+            if actual: 
+                error = abs(predicted-actual)
+                error_pct = error/actual*100
+                st.write(f"Error: {error:.2f} mm ({error_pct:.2f}%)")
