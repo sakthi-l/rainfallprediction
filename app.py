@@ -18,7 +18,7 @@ st.set_page_config(page_title="Flood/Drought & Rainfall Predictor", layout="wide
 # ==============================
 @st.cache_data
 def load_data():
-    df_class = pd.read_csv("/content/rainfallpred.csv")
+    df_class = pd.read_csv("rainfallpred.csv")
     df_forecast = pd.read_csv("Rainfall_Data_LL.csv")
     df_forecast.columns = df_forecast.columns.str.strip().str.upper()
     return df_class, df_forecast
