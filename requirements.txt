@@ -6,4 +6,4 @@ xgboost
 imbalanced-learn
 matplotlib
 seaborn
-prophet
+joblib
