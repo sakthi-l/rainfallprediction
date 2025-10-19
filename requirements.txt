@@ -7,3 +7,4 @@ imbalanced-learn
 matplotlib
 seaborn
 joblib
+plotly>=5.17.0
