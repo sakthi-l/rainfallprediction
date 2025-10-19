@@ -103,86 +103,140 @@ if task == "Flood/Drought Classification":
 # ==========================
 # RAINFALL FORECASTING
 # ==========================
+# ==========================
+# RAINFALL FORECASTING
+# ==========================
 else:
     st.header("🌧️ Rainfall Forecasting (Lasso)")
 
     region_input = st.text_input("Enter Region Name (Exact or Partial)", "")
-    year_input = st.number_input("Enter Year to Forecast", min_value=int(df_forecast['YEAR'].min()), max_value=int(df_forecast['YEAR'].max())+20, value=int(df_forecast['YEAR'].max()))
+    year_input = st.number_input("Enter Year to Forecast", 
+                                 min_value=int(df_forecast['YEAR'].min()), 
+                                 max_value=int(df_forecast['YEAR'].max())+20, 
+                                 value=int(df_forecast['YEAR'].max()))
 
     if st.button("Forecast"):
 
+        # Filter region
         region_match = df_forecast[df_forecast['SUBDIVISION'].str.contains(region_input, case=False, na=False)]
         if region_match.empty:
             st.error("❌ Region not found!")
+            st.stop()
+
+        # Aggregate yearly data
+        data = region_match.groupby("YEAR")["ANNUAL"].mean().reset_index().dropna()
+        data = data.sort_values("YEAR").reset_index(drop=True)
+        last_historical_year = data['YEAR'].max()
+
+        # Feature creation
+        def create_features_safe(data):
+            df = data.copy()
+            for i in range(1,8): df[f'Lag{i}'] = df["ANNUAL"].shift(i)
+            for window in [2,3,5,7,10]:
+                df[f'MA{window}'] = df["ANNUAL"].rolling(window).mean()
+                df[f'STD{window}'] = df["ANNUAL"].rolling(window).std()
+                df[f'Min{window}'] = df["ANNUAL"].rolling(window).min()
+                df[f'Max{window}'] = df["ANNUAL"].rolling(window).max()
+                df[f'Range{window}'] = df[f'Max{window}'] - df[f'Min{window}']
+            for span in [2,3,5,7]: df[f'EMA{span}'] = df["ANNUAL"].ewm(span=span, adjust=False).mean()
+            df['Year_Norm'] = (df['YEAR'] - df['YEAR'].min()) / (df['YEAR'].max() - df['YEAR'].min())
+            df['Year_Squared'] = df['Year_Norm']**2
+            df['Year_Cubed'] = df['Year_Norm']**3
+            for cycle in [5,7,11]:
+                df[f'Cycle{cycle}_Sin'] = np.sin(2*np.pi*df['YEAR']/cycle)
+                df[f'Cycle{cycle}_Cos'] = np.cos(2*np.pi*df['YEAR']/cycle)
+            df['Rate_Change'] = df["ANNUAL"].pct_change().fillna(0)
+            df['Rate_Change_2'] = df["ANNUAL"].pct_change(periods=2).fillna(0)
+            df['Momentum_3'] = df["ANNUAL"] - df["ANNUAL"].shift(3)
+            df['Momentum_5'] = df["ANNUAL"] - df["ANNUAL"].shift(5)
+            df['Volatility_3'] = df["ANNUAL"].rolling(3).std()/df["ANNUAL"].rolling(3).mean()
+            df['Volatility_5'] = df["ANNUAL"].rolling(5).std()/df["ANNUAL"].rolling(5).mean()
+            df['Lag1_x_MA3'] = df['Lag1']*df['MA3']
+            df['Lag1_x_Year'] = df['Lag1']*df['Year_Norm']
+            df.fillna(method='ffill', inplace=True)
+            df.fillna(method='bfill', inplace=True)
+            df.fillna(0, inplace=True)
+            return df
+
+        data_features = create_features_safe(data)
+        feature_cols = [c for c in data_features.columns if c not in ['YEAR','ANNUAL']]
+
+        # -------------------------
+        # Train Lasso
+        # -------------------------
+        X_train = data_features[feature_cols].values
+        y_train = data_features['ANNUAL'].values
+        scaler = RobustScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        tscv = TimeSeriesSplit(n_splits=min(5,len(X_train)//5))
+        lasso_cv = LassoCV(cv=tscv, max_iter=10000, random_state=42)
+        lasso_cv.fit(X_train_scaled, y_train)
+
+        # -------------------------
+        # Generate predictions
+        # -------------------------
+        predictions = []
+        forecast_years = []
+
+        # Historical years
+        if year_input <= last_historical_year:
+            X_test_scaled = scaler.transform(data_features[data_features['YEAR']==year_input][feature_cols].values)
+            predicted = float(lasso_cv.predict(X_test_scaled)[0])
+            actual = float(data.loc[data['YEAR']==year_input,'ANNUAL'].values[0])
+            st.subheader(f"🌦️ Forecast for {region_input.title()} in {year_input}")
+            st.write(f"Actual: {actual:.2f} mm")
+            st.write(f"Predicted: {predicted:.2f} mm")
+            st.write(f"Error: {abs(predicted-actual):.2f} mm ({abs(predicted-actual)/actual*100:.2f}%)")
         else:
-            data = region_match.groupby("YEAR")["ANNUAL"].mean().reset_index().dropna()
-            data = data.sort_values("YEAR").reset_index(drop=True)
-
-            # Feature creation
-            def create_features_safe(data):
-                df = data.copy()
-                for i in range(1,8): df[f'Lag{i}'] = df["ANNUAL"].shift(i)
-                for window in [2,3,5,7,10]:
-                    df[f'MA{window}'] = df["ANNUAL"].rolling(window).mean()
-                    df[f'STD{window}'] = df["ANNUAL"].rolling(window).std()
-                    df[f'Min{window}'] = df["ANNUAL"].rolling(window).min()
-                    df[f'Max{window}'] = df["ANNUAL"].rolling(window).max()
-                    df[f'Range{window}'] = df[f'Max{window}'] - df[f'Min{window}']
-                for span in [2,3,5,7]: df[f'EMA{span}'] = df["ANNUAL"].ewm(span=span, adjust=False).mean()
-                df['Year_Norm'] = (df['YEAR'] - df['YEAR'].min()) / (df['YEAR'].max() - df['YEAR'].min())
-                df['Year_Squared'] = df['Year_Norm']**2
-                df['Year_Cubed'] = df['Year_Norm']**3
-                for cycle in [5,7,11]:
-                    df[f'Cycle{cycle}_Sin'] = np.sin(2*np.pi*df['YEAR']/cycle)
-                    df[f'Cycle{cycle}_Cos'] = np.cos(2*np.pi*df['YEAR']/cycle)
-                df['Rate_Change'] = df["ANNUAL"].pct_change().fillna(0)
-                df['Rate_Change_2'] = df["ANNUAL"].pct_change(periods=2).fillna(0)
-                df['Momentum_3'] = df["ANNUAL"] - df["ANNUAL"].shift(3)
-                df['Momentum_5'] = df["ANNUAL"] - df["ANNUAL"].shift(5)
-                df['Volatility_3'] = df["ANNUAL"].rolling(3).std()/df["ANNUAL"].rolling(3).mean()
-                df['Volatility_5'] = df["ANNUAL"].rolling(5).std()/df["ANNUAL"].rolling(5).mean()
-                df['Lag1_x_MA3'] = df['Lag1']*df['MA3']
-                df['Lag1_x_Year'] = df['Lag1']*df['Year_Norm']
-                df.fillna(method='ffill', inplace=True)
-                df.fillna(method='bfill', inplace=True)
-                df.fillna(0, inplace=True)
-                return df
-
-            data_features = create_features_safe(data)
-            feature_cols = [c for c in data_features.columns if c not in ['YEAR','ANNUAL']]
-
-            # Future year row
-            if year_input > data['YEAR'].max():
+            # Future years
+            prev_predictions = data['ANNUAL'].tolist()
+            for yr in range(last_historical_year+1, year_input+1):
+                # Generate dynamic features using previous predictions
                 last_row = data_features.iloc[-1].copy()
                 future_row = last_row.copy()
-                future_row['YEAR'] = year_input
+                future_row['YEAR'] = yr
                 future_row['ANNUAL'] = np.nan
+
+                # Update lag features
+                for i in range(1,8):
+                    if i <= len(prev_predictions):
+                        future_row[f'Lag{i}'] = prev_predictions[-i]
+                    else:
+                        future_row[f'Lag{i}'] = prev_predictions[0]
+
+                # Update rolling averages dynamically
+                for window in [2,3,5,7,10]:
+                    recent_values = prev_predictions[-window:] if len(prev_predictions)>=window else prev_predictions
+                    future_row[f'MA{window}'] = np.mean(recent_values)
+                    future_row[f'STD{window}'] = np.std(recent_values)
+                    future_row[f'Min{window}'] = np.min(recent_values)
+                    future_row[f'Max{window}'] = np.max(recent_values)
+                    future_row[f'Range{window}'] = future_row[f'Max{window}'] - future_row[f'Min{window}']
+
+                # Trend features
+                future_row['Year_Norm'] = (yr - data['YEAR'].min())/(data['YEAR'].max()-data['YEAR'].min())
+                future_row['Year_Squared'] = future_row['Year_Norm']**2
+                future_row['Year_Cubed'] = future_row['Year_Norm']**3
+
+                # Momentum and rate of change
+                future_row['Rate_Change'] = (prev_predictions[-1]-prev_predictions[-2])/prev_predictions[-2] if len(prev_predictions)>=2 else 0
+                future_row['Rate_Change_2'] = (prev_predictions[-1]-prev_predictions[-3])/prev_predictions[-3] if len(prev_predictions)>=3 else 0
+                future_row['Momentum_3'] = (prev_predictions[-1]-prev_predictions[-4]) if len(prev_predictions)>=4 else 0
+                future_row['Momentum_5'] = (prev_predictions[-1]-prev_predictions[-6]) if len(prev_predictions)>=6 else 0
+
+                # Fill missing features
                 for col in feature_cols:
-                    if col not in future_row: future_row[col] = 0
-                X_test_df = pd.DataFrame([future_row])[feature_cols]
-            else:
-                X_test_df = data_features[data_features['YEAR']==year_input][feature_cols]
+                    if col not in future_row:
+                        future_row[col] = 0
 
-            # Train
-            X_train = data_features[feature_cols].values
-            y_train = data_features['ANNUAL'].values
+                X_future = pd.DataFrame([future_row])[feature_cols]
+                X_future_scaled = scaler.transform(X_future.values)
+                pred = float(lasso_cv.predict(X_future_scaled)[0])
+                prev_predictions.append(pred)
+                predictions.append(pred)
+                forecast_years.append(yr)
 
-            # Scaling
-            scaler = RobustScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            X_test_scaled = scaler.transform(X_test_df.values)
-
-            # LassoCV
-            tscv = TimeSeriesSplit(n_splits=min(5,len(X_train)//5))
-            lasso_cv = LassoCV(cv=tscv, max_iter=10000, random_state=42)
-            lasso_cv.fit(X_train_scaled, y_train)
-            predicted = float(lasso_cv.predict(X_test_scaled)[0])
-
-            st.subheader(f"🌦️ Forecast for {region_input.title()} in {year_input}")
-            if year_input <= data['YEAR'].max():
-                actual = float(data.loc[data['YEAR']==year_input,'ANNUAL'].values[0])
-                st.write(f"Actual: {actual:.2f} mm")
-                st.write(f"Predicted: {predicted:.2f} mm")
-                st.write(f"Error: {abs(predicted-actual):.2f} mm ({abs(predicted-actual)/actual*100:.2f}%)")
-            else:
-                st.write(f"Predicted: {predicted:.2f} mm")
+            st.subheader(f"🌦️ Forecast for {region_input.title()} up to {year_input}")
+            forecast_df = pd.DataFrame({'Year': forecast_years, 'Predicted_Rainfall_mm': predictions})
+            st.dataframe(forecast_df)
+            st.line_chart(forecast_df.set_index('Year'))
