@@ -1,48 +1,45 @@
-# ===============================
-# STREAMLIT APP: RAINFALL & FLOOD/DROUGHT
-# ===============================
+# -*- coding: utf-8 -*-
+"""
+Streamlit App: Flood/Drought Classification + Rainfall Forecasting (XGBoost)
+"""
 import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder, RobustScaler
-from sklearn.model_selection import train_test_split, TimeSeriesSplit
-from sklearn.linear_model import LassoCV
-from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split
+from xgboost import XGBClassifier, XGBRegressor
 from imblearn.over_sampling import SMOTE
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Rainfall & Flood/Drought Prediction", layout="wide")
+st.set_page_config(page_title="Rainfall Prediction App", layout="wide")
 
-# -------------------------
-# Load datasets
-# -------------------------
+# =======================
+# Load Datasets
+# =======================
 @st.cache_data
 def load_data():
-    df_class = pd.read_csv("rainfallpred.csv")       # Flood/Drought classification
-    df_forecast = pd.read_csv("Rainfall_Data_LL.csv")  # Rainfall forecasting
+    # Monthly data for classification
+    df_class = pd.read_csv("rainfallpred.csv")
+    # Annual data for forecasting
+    df_forecast = pd.read_csv("Rainfall_Data_LL.csv")
+    df_forecast.columns = df_forecast.columns.str.strip().str.upper()
     return df_class, df_forecast
 
 df_class, df_forecast = load_data()
-st.success("✅ Data loaded successfully!")
 
-# -------------------------
+# =======================
 # Sidebar: Task Selection
-# -------------------------
+# =======================
 task = st.sidebar.selectbox("Choose Task:", ["Flood/Drought Classification", "Rainfall Forecasting"])
 
-# ==========================
-# FLOOD/DROUGHT CLASSIFICATION
-# ==========================
+# =======================
+# Flood/Drought Classification
+# =======================
 if task == "Flood/Drought Classification":
-    st.header("🌊 Flood/Drought Classification")
-
-    # Region selection
-    regions = df_class['SUBDIVISION'].unique()
-    region_input = st.selectbox("Select Region:", sorted(regions))
-    year_input = st.number_input("Enter Year:", min_value=int(df_class['YEAR'].min()), max_value=int(df_class['YEAR'].max()), value=int(df_class['YEAR'].max()))
-
+    st.header("🌦️ Flood/Drought Classification")
+    
     months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
-
-    # Prepare classification data
     df_class['Total'] = df_class[months].sum(axis=1)
     df_class['region_mean'] = df_class.groupby('SUBDIVISION')['Total'].transform('mean')
     df_class['region_std'] = df_class.groupby('SUBDIVISION')['Total'].transform('std')
@@ -80,163 +77,138 @@ if task == "Flood/Drought Classification":
     X = df_class[feature_cols]
     y = df_class['Label']
 
-    # Balance classes
     sm = SMOTE(random_state=42)
     X_res, y_res = sm.fit_resample(X, y)
     le = LabelEncoder()
     y_encoded = le.fit_transform(y_res)
 
-    # Train XGBoost
     X_train, X_test, y_train, y_test = train_test_split(X_res, y_encoded, test_size=0.2, stratify=y_encoded, random_state=42)
-    clf = XGBClassifier(n_estimators=400, max_depth=6, learning_rate=0.05, subsample=0.9, colsample_bytree=0.9, gamma=0.1, objective='multi:softprob', num_class=3, random_state=42)
+
+    clf = XGBClassifier(n_estimators=400, max_depth=6, learning_rate=0.05,
+                        subsample=0.9, colsample_bytree=0.9, gamma=0.1,
+                        objective='multi:softprob', num_class=3, random_state=42)
     clf.fit(X_train, y_train)
 
-    # Prediction
-    row = df_class[(df_class['SUBDIVISION']==region_input) & (df_class['YEAR']==year_input)]
-    if not row.empty:
-        X_row = row[feature_cols]
-        pred_label = le.inverse_transform(np.argmax(clf.predict_proba(X_row), axis=1))[0]
-        st.success(f"🌦️ Prediction for {region_input} in {year_input}: {pred_label}")
-    else:
-        st.warning("⚠️ No historical data for this year. Please provide monthly input manually (future enhancement).")
+    st.subheader("Enter Monthly Rainfall Data for Prediction")
+    region_input = st.selectbox("Select Region:", sorted(df_class['SUBDIVISION'].unique()))
+    year_input = st.number_input("Enter Year:", min_value=int(df_class['YEAR'].min()), max_value=int(df_class['YEAR'].max())+10, value=int(df_class['YEAR'].max())+1)
+    monthly_input = []
+    for m in months:
+        val = st.number_input(f"{m} rainfall (mm)", value=0, step=1)
+        monthly_input.append(val)
 
-# ==========================
-# RAINFALL FORECASTING
-# ==========================
-# ==========================
-# RAINFALL FORECASTING
-# ==========================
+    if st.button("Predict Event"):
+        manual_df = pd.DataFrame([monthly_input], columns=months)
+        manual_df['Mean_Rain'] = manual_df[months].mean(axis=1)
+        manual_df['Std_Rain'] = manual_df[months].std(axis=1)
+        manual_df['CoeffVar'] = manual_df['Std_Rain'] / (manual_df['Mean_Rain'] + 1e-6)
+        manual_df['Dry_Months'] = (manual_df[months] < manual_df[months].mean(axis=1).mean()).sum(axis=1)
+        manual_df['Wet_Months'] = (manual_df[months] > manual_df[months].mean(axis=1).mean()).sum(axis=1)
+        manual_df['Max_Month'] = manual_df[months].idxmax(axis=1).apply(lambda x: months.index(x) + 1)
+        manual_df['Diff_Total'] = 0
+        manual_df['Prev_SPI'] = 0
+
+        region_row = pd.DataFrame(np.zeros((1, len(region_encoded.columns))), columns=region_encoded.columns)
+        if f"SUBDIVISION_{region_input}" in region_row.columns:
+            region_row[f"SUBDIVISION_{region_input}"] = 1
+
+        manual_features = pd.concat([manual_df, region_row], axis=1)[feature_cols]
+        pred_label = le.inverse_transform(np.argmax(clf.predict_proba(manual_features), axis=1))[0]
+
+        st.success(f"🌦️ Predicted Event for {region_input} in {year_input}: {pred_label}")
+
+# =======================
+# Rainfall Forecasting (XGBoost)
+# =======================
 else:
-    st.header("🌧️ Rainfall Forecasting (Lasso)")
+    st.header("🌦️ Rainfall Forecasting (XGBoost Regression)")
 
     region_input = st.text_input("Enter Region Name (Exact or Partial)", "")
     year_input = st.number_input("Enter Year to Forecast", 
                                  min_value=int(df_forecast['YEAR'].min()), 
                                  max_value=int(df_forecast['YEAR'].max())+20, 
-                                 value=int(df_forecast['YEAR'].max()))
+                                 value=int(df_forecast['YEAR'].max())+1)
 
     if st.button("Forecast"):
-
-        # Filter region
         region_match = df_forecast[df_forecast['SUBDIVISION'].str.contains(region_input, case=False, na=False)]
         if region_match.empty:
             st.error("❌ Region not found!")
             st.stop()
 
-        # Aggregate yearly data
         data = region_match.groupby("YEAR")["ANNUAL"].mean().reset_index().dropna()
         data = data.sort_values("YEAR").reset_index(drop=True)
         last_historical_year = data['YEAR'].max()
 
-        # Feature creation
-        def create_features_safe(data):
+        # Feature engineering
+        def create_features(data):
             df = data.copy()
-            for i in range(1,8): df[f'Lag{i}'] = df["ANNUAL"].shift(i)
+            for i in range(1,8): df[f'Lag{i}'] = df['ANNUAL'].shift(i)
             for window in [2,3,5,7,10]:
-                df[f'MA{window}'] = df["ANNUAL"].rolling(window).mean()
-                df[f'STD{window}'] = df["ANNUAL"].rolling(window).std()
-                df[f'Min{window}'] = df["ANNUAL"].rolling(window).min()
-                df[f'Max{window}'] = df["ANNUAL"].rolling(window).max()
-                df[f'Range{window}'] = df[f'Max{window}'] - df[f'Min{window}']
-            for span in [2,3,5,7]: df[f'EMA{span}'] = df["ANNUAL"].ewm(span=span, adjust=False).mean()
-            df['Year_Norm'] = (df['YEAR'] - df['YEAR'].min()) / (df['YEAR'].max() - df['YEAR'].min())
+                df[f'MA{window}'] = df['ANNUAL'].rolling(window).mean()
+                df[f'STD{window}'] = df['ANNUAL'].rolling(window).std()
+            df['Year_Norm'] = (df['YEAR'] - df['YEAR'].min())/(df['YEAR'].max()-df['YEAR'].min())
             df['Year_Squared'] = df['Year_Norm']**2
             df['Year_Cubed'] = df['Year_Norm']**3
-            for cycle in [5,7,11]:
-                df[f'Cycle{cycle}_Sin'] = np.sin(2*np.pi*df['YEAR']/cycle)
-                df[f'Cycle{cycle}_Cos'] = np.cos(2*np.pi*df['YEAR']/cycle)
-            df['Rate_Change'] = df["ANNUAL"].pct_change().fillna(0)
-            df['Rate_Change_2'] = df["ANNUAL"].pct_change(periods=2).fillna(0)
-            df['Momentum_3'] = df["ANNUAL"] - df["ANNUAL"].shift(3)
-            df['Momentum_5'] = df["ANNUAL"] - df["ANNUAL"].shift(5)
-            df['Volatility_3'] = df["ANNUAL"].rolling(3).std()/df["ANNUAL"].rolling(3).mean()
-            df['Volatility_5'] = df["ANNUAL"].rolling(5).std()/df["ANNUAL"].rolling(5).mean()
-            df['Lag1_x_MA3'] = df['Lag1']*df['MA3']
-            df['Lag1_x_Year'] = df['Lag1']*df['Year_Norm']
             df.fillna(method='ffill', inplace=True)
             df.fillna(method='bfill', inplace=True)
             df.fillna(0, inplace=True)
             return df
 
-        data_features = create_features_safe(data)
+        data_features = create_features(data)
         feature_cols = [c for c in data_features.columns if c not in ['YEAR','ANNUAL']]
 
-        # -------------------------
-        # Train Lasso
-        # -------------------------
         X_train = data_features[feature_cols].values
         y_train = data_features['ANNUAL'].values
+
         scaler = RobustScaler()
         X_train_scaled = scaler.fit_transform(X_train)
-        tscv = TimeSeriesSplit(n_splits=min(5,len(X_train)//5))
-        lasso_cv = LassoCV(cv=tscv, max_iter=10000, random_state=42)
-        lasso_cv.fit(X_train_scaled, y_train)
 
-        # -------------------------
-        # Generate predictions
-        # -------------------------
-        predictions = []
-        forecast_years = []
+        xgb_reg = XGBRegressor(n_estimators=500, max_depth=6, learning_rate=0.05,
+                               subsample=0.9, colsample_bytree=0.9, gamma=0.1,
+                               random_state=42)
+        xgb_reg.fit(X_train_scaled, y_train)
 
-        # Historical years
-        if year_input <= last_historical_year:
-            X_test_scaled = scaler.transform(data_features[data_features['YEAR']==year_input][feature_cols].values)
-            predicted = float(lasso_cv.predict(X_test_scaled)[0])
-            actual = float(data.loc[data['YEAR']==year_input,'ANNUAL'].values[0])
-            st.subheader(f"🌦️ Forecast for {region_input.title()} in {year_input}")
-            st.write(f"Actual: {actual:.2f} mm")
-            st.write(f"Predicted: {predicted:.2f} mm")
-            st.write(f"Error: {abs(predicted-actual):.2f} mm ({abs(predicted-actual)/actual*100:.2f}%)")
-        else:
-            # Future years
-            prev_predictions = data['ANNUAL'].tolist()
-            for yr in range(last_historical_year+1, year_input+1):
-                # Generate dynamic features using previous predictions
-                last_row = data_features.iloc[-1].copy()
-                future_row = last_row.copy()
-                future_row['YEAR'] = yr
-                future_row['ANNUAL'] = np.nan
+        prev_predictions = data['ANNUAL'].tolist()
+        forecast_years, predicted_rainfall, event_labels = [], [], []
 
-                # Update lag features
-                for i in range(1,8):
-                    if i <= len(prev_predictions):
-                        future_row[f'Lag{i}'] = prev_predictions[-i]
-                    else:
-                        future_row[f'Lag{i}'] = prev_predictions[0]
+        drought_pctl = np.percentile(data['ANNUAL'],5)
+        flood_pctl = np.percentile(data['ANNUAL'],95)
 
-                # Update rolling averages dynamically
-                for window in [2,3,5,7,10]:
-                    recent_values = prev_predictions[-window:] if len(prev_predictions)>=window else prev_predictions
-                    future_row[f'MA{window}'] = np.mean(recent_values)
-                    future_row[f'STD{window}'] = np.std(recent_values)
-                    future_row[f'Min{window}'] = np.min(recent_values)
-                    future_row[f'Max{window}'] = np.max(recent_values)
-                    future_row[f'Range{window}'] = future_row[f'Max{window}'] - future_row[f'Min{window}']
+        for yr in range(last_historical_year+1, year_input+1):
+            last_row = data_features.iloc[-1].copy()
+            future_row = last_row.copy()
+            future_row['YEAR'] = yr
+            for i in range(1,8):
+                future_row[f'Lag{i}'] = prev_predictions[-i] if i <= len(prev_predictions) else prev_predictions[0]
+            for window in [2,3,5,7,10]:
+                recent_values = prev_predictions[-window:] if len(prev_predictions) >= window else prev_predictions
+                future_row[f'MA{window}'] = np.mean(recent_values)
+                future_row[f'STD{window}'] = np.std(recent_values)
+            future_row['Year_Norm'] = (yr - data['YEAR'].min())/(data['YEAR'].max()-data['YEAR'].min())
+            future_row['Year_Squared'] = future_row['Year_Norm']**2
+            future_row['Year_Cubed'] = future_row['Year_Norm']**3
 
-                # Trend features
-                future_row['Year_Norm'] = (yr - data['YEAR'].min())/(data['YEAR'].max()-data['YEAR'].min())
-                future_row['Year_Squared'] = future_row['Year_Norm']**2
-                future_row['Year_Cubed'] = future_row['Year_Norm']**3
+            X_future_scaled = scaler.transform(pd.DataFrame([future_row])[feature_cols].values)
+            pred = float(xgb_reg.predict(X_future_scaled)[0])
+            prev_predictions.append(pred)
 
-                # Momentum and rate of change
-                future_row['Rate_Change'] = (prev_predictions[-1]-prev_predictions[-2])/prev_predictions[-2] if len(prev_predictions)>=2 else 0
-                future_row['Rate_Change_2'] = (prev_predictions[-1]-prev_predictions[-3])/prev_predictions[-3] if len(prev_predictions)>=3 else 0
-                future_row['Momentum_3'] = (prev_predictions[-1]-prev_predictions[-4]) if len(prev_predictions)>=4 else 0
-                future_row['Momentum_5'] = (prev_predictions[-1]-prev_predictions[-6]) if len(prev_predictions)>=6 else 0
+            if pred < drought_pctl:
+                event = "Drought"
+            elif pred > flood_pctl:
+                event = "Flood"
+            else:
+                event = "Normal"
 
-                # Fill missing features
-                for col in feature_cols:
-                    if col not in future_row:
-                        future_row[col] = 0
+            forecast_years.append(yr)
+            predicted_rainfall.append(pred)
+            event_labels.append(event)
 
-                X_future = pd.DataFrame([future_row])[feature_cols]
-                X_future_scaled = scaler.transform(X_future.values)
-                pred = float(lasso_cv.predict(X_future_scaled)[0])
-                prev_predictions.append(pred)
-                predictions.append(pred)
-                forecast_years.append(yr)
+        forecast_df = pd.DataFrame({
+            'Year': forecast_years,
+            'Predicted_Rainfall_mm': predicted_rainfall,
+            'Event': event_labels
+        })
 
-            st.subheader(f"🌦️ Forecast for {region_input.title()} up to {year_input}")
-            forecast_df = pd.DataFrame({'Year': forecast_years, 'Predicted_Rainfall_mm': predictions})
-            st.dataframe(forecast_df)
-            st.line_chart(forecast_df.set_index('Year'))
+        st.subheader(f"🌦️ Forecast & Flood/Drought Classification for {region_input.title()}")
+        st.dataframe(forecast_df)
+        st.line_chart(forecast_df.set_index('Year')['Predicted
