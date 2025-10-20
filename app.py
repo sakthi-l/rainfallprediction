@@ -317,9 +317,10 @@ def load_and_train_flood_model():
     return clf, le, df, feature_cols, months
 
 def predict_flood_drought(clf, le, df, feature_cols, months, region_name, year, monthly_data=None):
-    """Predict flood/drought condition"""
-    row = df[(df['SUBDIVISION'] == region_name) & (df['YEAR'] == year)]
+    """Improved flood/drought condition predictor with SPI normalization"""
 
+    # --- Case 1: Predict from existing data (already in dataset) ---
+    row = df[(df['SUBDIVISION'] == region_name) & (df['YEAR'] == year)]
     if not row.empty:
         features = row[feature_cols]
         pred = np.argmax(clf.predict_proba(features), axis=1)
@@ -327,31 +328,58 @@ def predict_flood_drought(clf, le, df, feature_cols, months, region_name, year, 
         probabilities = clf.predict_proba(features)[0]
         return pred_label, probabilities, None
 
+    # --- Case 2: Manual input prediction ---
     if monthly_data is None or len(monthly_data) != 12:
-        return None, None, "Need 12 monthly values"
+        return None, None, "Need 12 monthly rainfall values."
 
-    # Manual prediction
+    # Build dataframe for manual input
     manual_df = pd.DataFrame([monthly_data], columns=months)
+
+    # Compute basic rainfall stats
+    manual_df['Total'] = manual_df[months].sum(axis=1)
     manual_df['Mean_Rain'] = manual_df[months].mean(axis=1)
     manual_df['Std_Rain'] = manual_df[months].std(axis=1)
     manual_df['CoeffVar'] = manual_df['Std_Rain'] / (manual_df['Mean_Rain'] + 1e-6)
     manual_df['Dry_Months'] = (manual_df[months] < manual_df[months].mean(axis=1).mean()).sum(axis=1)
     manual_df['Wet_Months'] = (manual_df[months] > manual_df[months].mean(axis=1).mean()).sum(axis=1)
     manual_df['Max_Month'] = manual_df[months].idxmax(axis=1).apply(lambda x: months.index(x) + 1)
-    manual_df['Diff_Total'] = 0
-    manual_df['Prev_SPI'] = 0
 
+    # --- Region statistics for SPI normalization ---
+    region_data = df[df['SUBDIVISION'] == region_name]
+    if region_data.empty:
+        return None, None, f"Region '{region_name}' not found in dataset."
+
+    region_mean = region_data['Total'].mean()
+    region_std = region_data['Total'].std()
+    if region_std == 0:
+        region_std = 1e-6
+
+    manual_df['SPI_region'] = (manual_df['Total'] - region_mean) / region_std
+    manual_df['Prev_SPI'] = 0
+    manual_df['Diff_Total'] = manual_df['Total'] - region_mean
+
+    # --- One-hot encode region ---
     region_encoded_cols = [col for col in feature_cols if col.startswith('SUBDIVISION_')]
     region_row = pd.DataFrame(np.zeros((1, len(region_encoded_cols))), columns=region_encoded_cols)
     if f"SUBDIVISION_{region_name}" in region_row.columns:
         region_row[f"SUBDIVISION_{region_name}"] = 1
 
-    manual_features = pd.concat([manual_df, region_row], axis=1)[feature_cols]
-    pred = np.argmax(clf.predict_proba(manual_features), axis=1)
-    pred_label = le.inverse_transform(pred)[0]
-    probabilities = clf.predict_proba(manual_features)[0]
+    # Merge all features
+    manual_features = pd.concat([manual_df, region_row], axis=1)
 
-    return pred_label, probabilities, None
+    # Ensure all expected columns exist
+    for col in feature_cols:
+        if col not in manual_features.columns:
+            manual_features[col] = 0
+
+    manual_features = manual_features[feature_cols]
+
+    # --- Predict ---
+    probs = clf.predict_proba(manual_features)[0]
+    pred_idx = np.argmax(probs)
+    pred_label = le.inverse_transform([pred_idx])[0]
+
+    return pred_label, probs, None
 
 # ============================================================
 # MAIN APP
