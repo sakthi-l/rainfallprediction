@@ -415,7 +415,8 @@ def load_and_train_flood_model():
     
     # Encode previous label
     le_temp = LabelEncoder()
-    df['Prev_Label_Encoded'] = le_temp.fit_transform(df['Prev_Label'].fillna('Normal'))
+    df['Prev_Label_Encoded'] = le_temp.fit_transform(df['Prev_Label'].fillna('Normal').astype(str))
+
 
     # Region encoding
     enc = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
