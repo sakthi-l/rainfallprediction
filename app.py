@@ -95,40 +95,61 @@ elif mode == "Rainfall Forecasting":
             actual = df_region[df_region["YEAR"] == year_to_predict]["ANNUAL"].values[0]
             st.write(f"**Actual Annual Rainfall (available):** {actual:.2f} mm")
 
-# ============================================================
-# 🌊 FLOOD/DROUGHT PREDICTION (XGBoost)
-# ============================================================
-elif mode == "Flood/Drought Prediction":
-    st.title("🌊 Flood/Drought Prediction (XGBoost Model)")
+# ==============================
+# 🌊 Flood/Drought Classification
+# ==============================
+st.header("🌊 Flood/Drought Prediction (XGBoost Model)")
 
-    try:
-        df = pd.read_csv("rainfallpred.csv")
-        st.success("✅ Dataset loaded successfully: rainfallpred.csv")
-    except Exception as e:
-        st.error(f"⚠️ Unable to load dataset: {e}")
-        st.stop()
+try:
+    df = pd.read_csv("rainfallpred.csv")
+    st.success("✅ Dataset loaded successfully: rainfallpred.csv")
 
-    # Check required columns
-    if not {"SUBDIVISION", "YEAR", "ANNUAL"}.issubset(df.columns):
-        st.error("❌ Dataset must contain columns: SUBDIVISION, YEAR, and ANNUAL.")
-        st.stop()
+    # Select numeric columns only
+    df = df.select_dtypes(include=[np.number])
 
-    df = df.dropna(subset=["SUBDIVISION", "ANNUAL"])
-    # Automatically create a label column
-    avg_rain = df["ANNUAL"].mean()
-    df["LABEL"] = df["ANNUAL"].apply(lambda x: "Flood" if x > avg_rain * 1.1 else ("Drought" if x < avg_rain * 0.9 else "Normal"))
+    # Handle missing values
+    df = df.fillna(df.mean())
 
-    st.info("💡 Labels auto-generated based on rainfall intensity thresholds.")
+    # Ensure ANNUAL exists
+    if 'ANNUAL' not in df.columns:
+        st.error("❌ 'ANNUAL' column not found.")
+    else:
+        # Auto-generate labels if missing
+        if 'LABEL' not in df.columns:
+            st.info("💡 Labels auto-generated based on rainfall intensity thresholds.")
+            mean_rain = df['ANNUAL'].mean()
+            std_rain = df['ANNUAL'].std()
+            conditions = [
+                (df['ANNUAL'] < mean_rain - std_rain),
+                (df['ANNUAL'] > mean_rain + std_rain)
+            ]
+            choices = [0, 2]  # 0 = drought, 2 = flood
+            df['LABEL'] = np.select(conditions, choices, default=1)  # 1 = normal
 
-    X = df[["ANNUAL"]]
-    y = df["LABEL"]
+        # Split features and labels
+        X = df.drop(columns=['LABEL'])
+        y = df['LABEL'].astype(int)
 
-    clf = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=42)
-    clf.fit(X, y)
+        # Train model safely
+        from xgboost import XGBClassifier
+        clf = XGBClassifier(eval_metric='mlogloss', use_label_encoder=False)
+        clf.fit(X, y)
 
-    rainfall_input = st.number_input("Enter rainfall (mm) to classify:", 0, 3000, 1200)
-    pred = clf.predict([[rainfall_input]])[0]
+        # Prediction UI
+        st.subheader("🔮 Predict Flood/Drought Status")
+        region = st.text_input("Enter Region Name:")
+        year = st.number_input("Enter Year:", min_value=int(df['YEAR'].min()), max_value=int(df['YEAR'].max()))
 
-    st.success("✅ Prediction completed.")
-    st.write(f"**Input Rainfall:** {rainfall_input:.2f} mm")
-    st.write(f"**Predicted Condition:** {pred}")
+        if st.button("Predict"):
+            # Match row for region/year if exists
+            row = df[(df['YEAR'] == year)]
+            if not row.empty:
+                X_input = row.drop(columns=['LABEL'])
+                pred = clf.predict(X_input)[0]
+                label_map = {0: "🌵 Drought", 1: "🌤 Normal", 2: "🌊 Flood"}
+                st.success(f"✅ Predicted Condition for {region or 'Region'} ({year}): {label_map[pred]}")
+            else:
+                st.warning("⚠️ No matching year found in dataset.")
+
+except Exception as e:
+    st.error(f"⚠️ Error: {e}")
