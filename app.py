@@ -1,6 +1,7 @@
 """
-🌦️ Enhanced Rainfall Prediction & Flood/Drought Analysis Dashboard
-Deploy with: streamlit run app.py
+🌦️ Rainfall Prediction & Flood/Drought Analysis Dashboard
+Loads dataset directly from GitHub
+Run with: streamlit run app.py
 """
 
 # ============================================================
@@ -14,13 +15,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # Machine Learning
-from sklearn.linear_model import LassoCV, Ridge
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.preprocessing import RobustScaler
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from xgboost import XGBRegressor
 from prophet import Prophet
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 # ============================================================
 # Streamlit Page Configuration
@@ -47,103 +43,120 @@ selected_mode = st.sidebar.radio(
 # ============================================================
 
 if selected_mode == "🏠 Home":
-    st.title("🌦️ Enhanced Rainfall Prediction & Analysis System")
+    st.title("🌦️ Rainfall Prediction & Flood/Drought Analysis System")
     st.markdown("""
     ### Welcome!
-    This system enables:
-    - 📊 **Rainfall Forecasting** using AI models  
-    - 🌊 **Flood & Drought Detection** using rainfall thresholds  
-    - 📅 Forecasts up to 2035 using hybrid ML and Prophet models  
+    This app performs:
+    - 📊 **Rainfall Pattern Analysis** using Prophet  
+    - 🌊 **Flood & Drought Classification** using rainfall thresholds  
+    - 📈 Model evaluation with MAE & RMSE  
 
-    💡 *Developed with Prophet, XGBoost, and Lasso Regularization for improved accuracy.*
+    💡 *Now fully automated with GitHub dataset loading!*
     """)
 
 # ============================================================
-# 📊 RAINFALL FORECASTING
+# 📊 RAINFALL FORECASTING (from GitHub)
 # ============================================================
 
 elif selected_mode == "📊 Rainfall Forecasting":
-    st.title("📊 Rainfall Forecasting Module")
+    st.title("📊 Rainfall Forecasting (Historical Analysis)")
 
-    uploaded_file = st.file_uploader("📂 Upload Rainfall Data (CSV)", type=["csv"])
+    github_url = st.text_input(
+        "🌐 Enter GitHub Raw CSV URL:",
+        "https://raw.githubusercontent.com/USERNAME/REPO/main/your_rainfall_data.csv"
+    )
 
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        st.success("✅ Data successfully loaded!")
-        st.write(df.head())
+    if github_url:
+        try:
+            df = pd.read_csv(github_url)
+            st.success("✅ Dataset successfully loaded from GitHub!")
+            st.write(df.head())
 
-        # --- Data Preprocessing ---
-        df.columns = [c.strip().title() for c in df.columns]
-        if "Year" not in df.columns:
-            st.error("❌ The dataset must contain a 'Year' column.")
-        elif "Rainfall_Mm" not in df.columns and "Rainfall_mm" not in df.columns:
-            st.error("❌ The dataset must contain a 'Rainfall_mm' column.")
-        else:
-            if "Rainfall_Mm" not in df.columns:
-                df.rename(columns={"Rainfall_mm": "Rainfall_Mm"}, inplace=True)
-            df["Year"] = pd.to_datetime(df["Year"], format="%Y")
+            # --- Data Preprocessing ---
+            df.columns = [c.strip().title() for c in df.columns]
+            if "Year" not in df.columns:
+                st.error("❌ The dataset must contain a 'Year' column.")
+            elif "Rainfall_Mm" not in df.columns and "Rainfall_mm" not in df.columns:
+                st.error("❌ The dataset must contain a 'Rainfall_mm' column.")
+            else:
+                if "Rainfall_Mm" not in df.columns:
+                    df.rename(columns={"Rainfall_mm": "Rainfall_Mm"}, inplace=True)
+                df["Year"] = pd.to_datetime(df["Year"], format="%Y")
 
-            # --- Forecasting Model ---
-            prophet_df = df.rename(columns={"Year": "ds", "Rainfall_Mm": "y"})
-            model = Prophet()
-            model.fit(prophet_df)
+                # --- Prophet Model (Historical Only) ---
+                prophet_df = df.rename(columns={"Year": "ds", "Rainfall_Mm": "y"})
+                model = Prophet()
+                model.fit(prophet_df)
+                forecast = model.predict(prophet_df)
+                df["Predicted_Rainfall"] = forecast["yhat"]
 
-            # Forecast next 10 years
-            future = model.make_future_dataframe(periods=10, freq="Y")
-            forecast = model.predict(future)
+                # --- Display ---
+                st.markdown("### 📋 Observed vs Predicted Rainfall")
+                st.dataframe(df[["Year", "Rainfall_Mm", "Predicted_Rainfall"]])
 
-            # Display results
-            st.markdown("### 🔮 10-Year Rainfall Forecast (Prophet Model)")
-            st.dataframe(forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(10))
-
-            # Evaluation (for past data)
-            if len(df) > 5:
-                y_true = prophet_df["y"].values
-                y_pred = model.predict(prophet_df)["yhat"].values
-                mae = mean_absolute_error(y_true, y_pred)
-                rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-                st.markdown("### 📈 Model Evaluation Metrics")
+                # --- Evaluation ---
+                mae = mean_absolute_error(df["Rainfall_Mm"], df["Predicted_Rainfall"])
+                rmse = np.sqrt(mean_squared_error(df["Rainfall_Mm"], df["Predicted_Rainfall"]))
+                st.markdown("### 📈 Model Performance")
                 st.write(f"**MAE:** {mae:.2f}")
                 st.write(f"**RMSE:** {rmse:.2f}")
 
-            st.success("✅ Forecast generated successfully!")
+                st.success("✅ Historical rainfall analysis complete (no future forecast).")
+
+        except Exception as e:
+            st.error(f"❌ Failed to load dataset. Please check your GitHub URL.\n\nError: {e}")
 
 # ============================================================
-# 🌊 FLOOD/DROUGHT PREDICTION
+# 🌊 FLOOD/DROUGHT PREDICTION (from GitHub)
 # ============================================================
 
 elif selected_mode == "🌊 Flood/Drought Prediction":
     st.title("🌊 Flood & Drought Prediction Module")
 
-    uploaded_file = st.file_uploader("📂 Upload Rainfall Dataset (CSV)", type=["csv"])
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        st.success("✅ Data loaded successfully!")
-        st.write(df.head())
+    github_url = st.text_input(
+        "🌐 Enter GitHub Raw CSV URL:",
+        "https://raw.githubusercontent.com/USERNAME/REPO/main/your_rainfall_data.csv"
+    )
 
-        if "Rainfall_mm" not in df.columns:
-            st.error("❌ 'Rainfall_mm' column not found in dataset.")
-        else:
-            # --- Define thresholds ---
-            threshold_high = df["Rainfall_mm"].quantile(0.75)
-            threshold_low = df["Rainfall_mm"].quantile(0.25)
+    if github_url:
+        try:
+            df = pd.read_csv(github_url)
+            st.success("✅ Dataset successfully loaded from GitHub!")
+            st.write(df.head())
 
-            def classify_rainfall(value):
-                if value >= threshold_high:
-                    return "Flood"
-                elif value <= threshold_low:
-                    return "Drought"
-                else:
-                    return "Normal"
+            if "Rainfall_mm" not in df.columns:
+                st.error("❌ 'Rainfall_mm' column not found in dataset.")
+            else:
+                # --- Thresholds ---
+                threshold_high = df["Rainfall_mm"].quantile(0.75)
+                threshold_low = df["Rainfall_mm"].quantile(0.25)
 
-            df["LABEL"] = df["Rainfall_mm"].apply(classify_rainfall)
-            st.markdown("### 🌧️ Classification Results")
-            st.dataframe(df[["Year", "Rainfall_mm", "LABEL"]])
+                def classify_rainfall(value):
+                    if value >= threshold_high:
+                        return "Flood"
+                    elif value <= threshold_low:
+                        return "Drought"
+                    else:
+                        return "Normal"
 
-            # Count results
-            st.markdown("### 📊 Classification Summary")
-            summary = df["LABEL"].value_counts().reset_index()
-            summary.columns = ["Condition", "Count"]
-            st.dataframe(summary)
+                df["LABEL"] = df["Rainfall_mm"].apply(classify_rainfall)
 
-            st.success("✅ Flood/Drought classification complete!")
+                st.markdown("### 🌧️ Flood/Drought Classification Results")
+                st.dataframe(df[["Year", "Rainfall_mm", "LABEL"]])
+
+                summary = df["LABEL"].value_counts().reset_index()
+                summary.columns = ["Condition", "Count"]
+                st.markdown("### 📊 Summary")
+                st.dataframe(summary)
+
+                st.success("✅ Flood/Drought classification complete!")
+
+        except Exception as e:
+            st.error(f"❌ Failed to load dataset from GitHub.\n\nError: {e}")
+
+# ============================================================
+# END
+# ============================================================
+
+st.markdown("---")
+st.caption("🌧️ Developed by Sakthi | AI-driven Rainfall & Disaster Forecasting System")
