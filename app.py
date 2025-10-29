@@ -374,7 +374,7 @@ def predict_flood_drought(clf, le, df, feature_cols, months, region_name, year, 
 # MAIN APP
 # ============================================================
 def main():
-    st.title("🌦️ Rainfall Forecast & Flood/Drought Predictor (Minimal)")
+    st.title("🌦️ Rainfall Forecast & Flood/Drought Predictor ")
 
     with st.sidebar:
         st.header("Navigation")
