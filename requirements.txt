@@ -1,10 +1,7 @@
-streamlit
+streamlit==1.50.0
 pandas
 numpy
-scikit-learn
+prophet
 xgboost
+scikit-learn
 imbalanced-learn
-matplotlib
-seaborn
-joblib
-plotly>=5.17.0
