@@ -670,69 +670,10 @@ def main():
                         st.warning("⚠️ Moderate prediction accuracy")
                     else:
                         st.error("❌ High prediction error")
-
-                # Visualization
-                if isinstance(result, pd.DataFrame):
-                    fig = go.Figure()
                     
-                    # Historical data
-                    fig.add_trace(go.Scatter(
-                        x=result['YEAR'], 
-                        y=result['ANNUAL'],
-                        mode='lines+markers', 
-                        name='Historical',
-                        line=dict(color='#1E88E5', width=2),
-                        marker=dict(size=6)
-                    ))
                     
-                    # Prediction point
-                    if year not in result['YEAR'].values:
-                        fig.add_trace(go.Scatter(
-                            x=[year], 
-                            y=[predicted],
-                            mode='markers', 
-                            name='Predicted',
-                            marker=dict(color='#E53935', size=14, symbol='star')
-                        ))
-                    
-                    # Trend line
-                    if len(result) > 5:
-                        z = np.polyfit(result['YEAR'], result['ANNUAL'], 2)
-                        p = np.poly1d(z)
-                        trend_x = np.linspace(result['YEAR'].min(), max(result['YEAR'].max(), year), 100)
-                        fig.add_trace(go.Scatter(
-                            x=trend_x,
-                            y=p(trend_x),
-                            mode='lines',
-                            name='Trend',
-                            line=dict(color='#43A047', width=2, dash='dash')
-                        ))
-                    
-                    fig.update_layout(
-                        title=f"Rainfall Trend Analysis - {region}",
-                        xaxis_title="Year", 
-                        yaxis_title="Annual Rainfall (mm)",
-                        height=500,
-                        hovermode='x unified',
-                        template='plotly_white'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Statistics
-                    st.markdown("---")
-                    st.subheader("📊 Statistical Summary")
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Average", f"{result['ANNUAL'].mean():.2f} mm")
-                    with col2:
-                        st.metric("Std Dev", f"{result['ANNUAL'].std():.2f} mm")
-                    with col3:
-                        st.metric("Min", f"{result['ANNUAL'].min():.2f} mm")
-                    with col4:
-                        st.metric("Max", f"{result['ANNUAL'].max():.2f} mm")
-
     # Flood/Drought Prediction
-    else "🌊 Flood/Drought Prediction":
+    else:
         st.header("Flood & Drought Risk Assessment")
         
         clf, le, df, feature_cols, months = load_and_train_flood_model()
@@ -817,24 +758,7 @@ def main():
                             delta=f"{'High' if confidence > 60 else 'Moderate' if confidence > 40 else 'Low'} confidence"
                         )
 
-                # Probability visualization
-                fig = go.Figure(data=[
-                    go.Bar(
-                        x=labels, 
-                        y=probabilities * 100,
-                        marker_color=['#E53935', '#FDD835', '#43A047'],
-                        text=[f"{p*100:.1f}%" for p in probabilities],
-                        textposition='auto',
-                    )
-                ])
-                fig.update_layout(
-                    title="Classification Probabilities",
-                    yaxis_title="Probability (%)",
-                    height=350,
-                    showlegend=False,
-                    template='plotly_white'
-                )
-                st.plotly_chart(fig, use_container_width=True)
+
                 
                 # Risk interpretation
                 st.markdown("---")
