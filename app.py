@@ -732,7 +732,7 @@ def main():
                         st.metric("Max", f"{result['ANNUAL'].max():.2f} mm")
 
     # Flood/Drought Prediction
-    else app_mode == "🌊 Flood/Drought Prediction":
+    else "🌊 Flood/Drought Prediction":
         st.header("Flood & Drought Risk Assessment")
         
         clf, le, df, feature_cols, months = load_and_train_flood_model()
