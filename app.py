@@ -1,146 +1,117 @@
+# ============================================================
+# 🌦️ RAINFALL FORECASTING (LASSO) + FLOOD/DROUGHT CLASSIFICATION
+# ============================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
 
-from prophet import Prophet
-from xgboost import XGBRegressor, XGBClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import RobustScaler, LabelEncoder
-from sklearn.metrics import classification_report
-from imblearn.over_sampling import SMOTE
+from sklearn.linear_model import LassoCV
+from sklearn.preprocessing import RobustScaler
+from sklearn.model_selection import TimeSeriesSplit
+from xgboost import XGBClassifier
 
 # ============================================================
-# APP HEADER
+# PAGE SETTINGS
 # ============================================================
-st.set_page_config(page_title="Rainfall & Flood/Drought Predictor", layout="centered")
 
-st.title("🌦 Rainfall Forecasting & Flood/Drought Classification Dashboard")
-st.markdown("### Upload your dataset and choose a task")
-
-# ============================================================
-# FILE UPLOAD
-# ============================================================
-uploaded_file = st.file_uploader("📂 Upload a CSV file", type=["csv"])
-
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    st.success("✅ Data successfully uploaded!")
-    st.write("### Preview of Dataset:")
-    st.dataframe(df.head())
-else:
-    st.warning("⚠️ Please upload a dataset to continue.")
-    st.stop()
-
-# ============================================================
-# SELECT TASK
-# ============================================================
-task = st.radio(
-    "Choose Task:",
-    ["🌧 Flood/Drought Classification", "🌦 Rainfall Forecasting (Hybrid)"]
+st.set_page_config(
+    page_title="Rainfall Forecast & Flood/Drought Classification",
+    page_icon="🌦️",
+    layout="centered"
 )
 
+st.title("🌦️ Rainfall Forecasting & 🌊 Flood/Drought Classification")
+
 # ============================================================
-# 🌧 FLOOD/DROUGHT CLASSIFICATION
+# SIDEBAR MENU
 # ============================================================
-if task == "🌧 Flood/Drought Classification":
-    if 'LABEL' not in df.columns:
-        st.error("Dataset must contain a 'LABEL' column for classification.")
+
+st.sidebar.title("📂 Select Task")
+task = st.sidebar.radio("Choose an option:", [
+    "🌦 Rainfall Forecasting (LASSO)",
+    "🌊 Flood/Drought Classification"
+])
+
+# ============================================================
+# 🌦 RAINFALL FORECASTING (LASSO)
+# ============================================================
+
+if task == "🌦 Rainfall Forecasting (LASSO)":
+    st.subheader("🌦 Rainfall Forecasting using LASSO Regularization")
+
+    try:
+        df = pd.read_csv("Rainfall_Data_LL.csv")  # 📂 ensure this file is in the repo
+        st.success("✅ Dataset loaded successfully: Rainfall_Data_LL.csv")
+    except Exception as e:
+        st.error(f"⚠️ Error loading dataset: {e}")
         st.stop()
 
-    label_encoder = LabelEncoder()
-    df['LABEL'] = label_encoder.fit_transform(df['LABEL'])
-
-    X = df.drop(columns=['LABEL'], errors='ignore')
-    y = df['LABEL']
-
-    # Handle categorical columns
-    X = pd.get_dummies(X, drop_first=True)
-
-    smote = SMOTE(random_state=42)
-    X_res, y_res = smote.fit_resample(X, y)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_res, y_res, test_size=0.2, random_state=42
-    )
-
-    model = XGBClassifier(random_state=42, n_estimators=200, learning_rate=0.1)
-    model.fit(X_train, y_train)
-
-    preds = model.predict(X_test)
-    st.subheader("✅ Classification Completed")
-    st.write("**Predicted Classes (sample):**")
-    st.write(pd.DataFrame({'Actual': y_test[:10].values, 'Predicted': preds[:10]}))
-
-    report = classification_report(y_test, preds, output_dict=True)
-    report_df = pd.DataFrame(report).transpose()
-    st.write("**Classification Summary:**")
-    st.dataframe(report_df.round(3))
-
-# ============================================================
-# 🌦 RAINFALL FORECASTING (HYBRID)
-# ============================================================
-elif task == "🌦 Rainfall Forecasting (Hybrid)":
-    if 'YEAR' not in df.columns or 'ANNUAL' not in df.columns:
-        st.error("Dataset must contain 'YEAR' and 'ANNUAL' columns for rainfall forecasting.")
+    # Ensure columns
+    if "YEAR" not in df.columns or "ANNUAL" not in df.columns:
+        st.error("❌ Dataset must contain columns: YEAR, ANNUAL")
         st.stop()
 
-    data = df[['YEAR', 'ANNUAL']].dropna()
-    data = data.sort_values(by='YEAR')
+    df = df.dropna().reset_index(drop=True)
 
-    # Prophet expects columns: ds, y
-    prophet_df = pd.DataFrame({
-        'ds': pd.to_datetime(data['YEAR'], format='%Y'),
-        'y': data['ANNUAL']
-    })
+    X = np.array(df.index).reshape(-1, 1)
+    y = df["ANNUAL"].values
 
-    model_prophet = Prophet(yearly_seasonality=True, daily_seasonality=False)
-    model_prophet.fit(prophet_df)
-
-    # Create future dataframe till 2035
-    future = model_prophet.make_future_dataframe(periods=(2035 - data['YEAR'].max()), freq='Y')
-    forecast_prophet = model_prophet.predict(future)
-
-    # Hybrid: Combine Prophet + XGBoost
-    forecast = forecast_prophet[['ds', 'yhat']].copy()
-    forecast.rename(columns={'ds': 'YEAR'}, inplace=True)
-    forecast['YEAR'] = forecast['YEAR'].dt.year
-
-    merged = pd.merge(data, forecast, on='YEAR', how='right')
-    merged['FINAL_PRED'] = merged['yhat']
-
-    # XGBoost fine-tuning
-    xgb = XGBRegressor(random_state=42, n_estimators=300, learning_rate=0.05)
     scaler = RobustScaler()
+    X_scaled = scaler.fit_transform(X)
 
-    valid_data = merged.dropna()
-    X = scaler.fit_transform(valid_data[['YEAR']])
-    y = valid_data['FINAL_PRED']
+    tscv = TimeSeriesSplit(n_splits=5)
+    model = LassoCV(cv=tscv)
+    model.fit(X_scaled, y)
 
-    xgb.fit(X, y)
-    future_years = np.arange(data['YEAR'].max() + 1, 2036).reshape(-1, 1)
-    future_scaled = scaler.transform(future_years)
-    future_preds = xgb.predict(future_scaled)
+    # Forecast next 10 years
+    future_years = np.arange(df["YEAR"].max() + 1, df["YEAR"].max() + 11)
+    X_future = np.arange(len(df), len(df) + 10).reshape(-1, 1)
+    X_future_scaled = scaler.transform(X_future)
+    y_pred = model.predict(X_future_scaled)
 
-    forecast_table = pd.DataFrame({
-        'YEAR': future_years.flatten(),
-        'Predicted_Rainfall_mm': np.round(future_preds, 2)
+    forecast_df = pd.DataFrame({
+        "YEAR": future_years,
+        "Predicted_Rainfall(mm)": np.round(y_pred, 2)
     })
 
-    st.subheader("✅ Rainfall Forecast (Hybrid Prophet + XGBoost)")
-    st.write("**Forecasted Rainfall up to 2035:**")
-    st.dataframe(forecast_table)
-
-    st.download_button(
-        label="⬇️ Download Forecast Data",
-        data=forecast_table.to_csv(index=False),
-        file_name="Rainfall_Forecast_2035.csv",
-        mime="text/csv"
-    )
+    st.dataframe(forecast_df, width=600)
+    st.success("✅ Forecast completed successfully.")
 
 # ============================================================
-# FOOTER
+# 🌊 FLOOD/DROUGHT CLASSIFICATION
 # ============================================================
-st.markdown("---")
-st.caption("Developed for Rainfall & Flood/Drought Prediction — Clean No-Plot Version")
+
+elif task == "🌊 Flood/Drought Classification":
+    st.subheader("🌊 Flood/Drought Classification using XGBoost")
+
+    try:
+        df = pd.read_csv("rainfallpred.csv")  # 📂 ensure this file is in the repo
+        st.success("✅ Dataset loaded successfully: rainfallpred.csv")
+    except Exception as e:
+        st.error(f"⚠️ Error loading dataset: {e}")
+        st.stop()
+
+    # Ensure columns
+    if "RAINFALL" not in df.columns or "LABEL" not in df.columns:
+        st.error("❌ Dataset must contain columns: RAINFALL, LABEL")
+        st.stop()
+
+    df = df.dropna().reset_index(drop=True)
+    X = df[["RAINFALL"]]
+    y = df["LABEL"]
+
+    clf = XGBClassifier()
+    clf.fit(X, y)
+
+    rainfall_input = st.number_input("Enter rainfall (mm) to classify:", 0, 3000, 1200)
+    pred = clf.predict([[rainfall_input]])[0]
+
+    if pred == 1:
+        st.success("🌧️ Prediction: FLOOD LIKELY")
+    else:
+        st.warning("☀️ Prediction: DROUGHT LIKELY")
+
+    st.info("Model trained on your dataset (rainfallpred.csv)")
