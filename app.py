@@ -1,3 +1,8 @@
+# ============================================================
+# 🌦️ RAINFALL FORECASTING (LASSO) + 🌊 FLOOD/DROUGHT PREDICTION (XGBoost)
+# Auto-Detect Columns | Minimal Text-Only UI
+# ============================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -59,20 +64,37 @@ elif mode == "Rainfall Forecasting":
         st.stop()
 
     df.columns = df.columns.str.strip().str.upper()
-    if "REGION" not in df.columns or "YEAR" not in df.columns or "ANNUAL" not in df.columns:
-        st.error("❌ Dataset must contain 'REGION', 'YEAR', and 'ANNUAL' columns.")
+
+    # --- Auto-detect columns ---
+    region_col, year_col, rain_col = None, None, None
+    for col in df.columns:
+        if any(x in col for x in ["REGION", "STATE", "PLACE", "AREA"]):
+            region_col = col
+        elif any(x in col for x in ["YEAR"]):
+            year_col = col
+        elif any(x in col for x in ["ANNUAL", "RAIN", "PRECIP"]):
+            rain_col = col
+
+    if not all([region_col, year_col, rain_col]):
+        st.error("❌ Could not detect region, year, or rainfall column names.")
+        st.info("Ensure your dataset includes columns related to region, year, and annual rainfall.")
         st.stop()
 
-    regions = sorted(df["REGION"].unique())
+    # Clean dataframe
+    df = df.dropna(subset=[region_col, year_col, rain_col])
+    regions = sorted(df[region_col].unique())
     region = st.selectbox("Select Region", regions)
-    year_to_predict = st.number_input("Enter Year to predict", min_value=int(df["YEAR"].min()),
-                                      max_value=int(df["YEAR"].max()) + 20,
-                                      value=int(df["YEAR"].max()) + 1)
+    year_to_predict = st.number_input(
+        "Enter Year to predict",
+        min_value=int(df[year_col].min()),
+        max_value=int(df[year_col].max()) + 20,
+        value=int(df[year_col].max()) + 1
+    )
 
     if st.button("Predict Rainfall"):
-        df_region = df[df["REGION"] == region].dropna(subset=["ANNUAL"])
-        X = np.array(df_region["YEAR"]).reshape(-1, 1)
-        y = df_region["ANNUAL"].values
+        df_region = df[df[region_col] == region].dropna(subset=[rain_col])
+        X = np.array(df_region[year_col]).reshape(-1, 1)
+        y = df_region[rain_col].values
 
         scaler = RobustScaler()
         X_scaled = scaler.fit_transform(X)
@@ -81,7 +103,7 @@ elif mode == "Rainfall Forecasting":
         model = LassoCV(cv=tscv)
         model.fit(X_scaled, y)
 
-        # Predict rainfall for the selected year
+        # Predict rainfall for selected year
         year_scaled = scaler.transform([[year_to_predict]])
         y_pred = model.predict(year_scaled)[0]
 
@@ -90,9 +112,9 @@ elif mode == "Rainfall Forecasting":
         st.write(f"**Year:** {year_to_predict}")
         st.write(f"**Predicted Annual Rainfall:** {y_pred:.2f} mm")
 
-        # If actual value exists
-        if year_to_predict in df_region["YEAR"].values:
-            actual = df_region[df_region["YEAR"] == year_to_predict]["ANNUAL"].values[0]
+        # Show actual value if available
+        if year_to_predict in df_region[year_col].values:
+            actual = df_region[df_region[year_col] == year_to_predict][rain_col].values[0]
             st.write(f"**Actual Annual Rainfall (available):** {actual:.2f} mm")
 
 # ============================================================
@@ -111,9 +133,8 @@ elif mode == "Flood/Drought Prediction":
 
     df.columns = df.columns.str.strip().str.upper()
 
-    # Auto-detect rainfall & label columns
-    rainfall_col = None
-    label_col = None
+    # --- Auto-detect rainfall & label columns ---
+    rainfall_col, label_col = None, None
     for col in df.columns:
         if any(x in col for x in ["RAIN", "PRECIP", "TOTAL"]):
             rainfall_col = col
@@ -121,8 +142,8 @@ elif mode == "Flood/Drought Prediction":
             label_col = col
 
     if rainfall_col is None or label_col is None:
-        st.error("❌ Could not find rainfall or label columns automatically.")
-        st.info("Ensure dataset has at least one column with 'RAIN' and one with 'LABEL' or 'CLASS'.")
+        st.error("❌ Could not automatically detect rainfall and label columns.")
+        st.info("Please ensure dataset contains columns with 'RAIN' and 'LABEL' or 'CLASS'.")
         st.stop()
 
     st.write(f"🌧 Using rainfall column: `{rainfall_col}`")
@@ -132,8 +153,7 @@ elif mode == "Flood/Drought Prediction":
     X = df[[rainfall_col]]
     y = df[label_col]
 
-    # Train model
-    clf = XGBClassifier(use_label_encoder=False, eval_metric="mlogloss", random_state=42)
+    clf = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=42)
     clf.fit(X, y)
 
     rainfall_input = st.number_input("Enter rainfall (mm) to classify:", 0, 3000, 1200)
